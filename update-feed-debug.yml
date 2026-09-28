@@ -1,0 +1,32 @@
+name: 更新微博 RSS
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  update-feed:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 校验 Secret 哈希（临时调试）
+        env:
+          WEIBO_COOKIES: ${{ secrets.WEIBO_COOKIES }}
+        run: printf '%s' "$WEIBO_COOKIES" | sha256sum | cut -d' ' -f1
+      - name: 抓取并生成 RSS
+        env:
+          WEIBO_COOKIES: ${{ secrets.WEIBO_COOKIES }}
+        run: python3 fetch_weibo.py .
+      - name: 提交更新
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "更新微博 RSS $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push
