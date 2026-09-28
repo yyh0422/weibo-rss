@@ -12,6 +12,7 @@ import re
 import sys
 import time
 import urllib.request
+import urllib.error
 from datetime import datetime
 from email.utils import format_datetime
 from xml.sax.saxutils import escape as xml_escape
@@ -30,6 +31,10 @@ USERS = [
 PAGES_BASE = "https://yyh0422.github.io/weibo-rss"
 
 
+class ApiError(RuntimeError):
+    pass
+
+
 def api_get(url, cookies):
     req = urllib.request.Request(url, headers={
         "User-Agent": UA,
@@ -37,9 +42,25 @@ def api_get(url, cookies):
         "Referer": "https://m.weibo.cn/",
         "X-Requested-With": "XMLHttpRequest",
     })
-    with urllib.request.urlopen(req, timeout=25) as r:
-        raw = r.read().decode("utf-8", errors="replace")
-    return json.loads(raw)
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            status = r.status
+            raw = r.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:300]
+        raise ApiError(f"HTTP {e.code}，响应前 300 字符: {body}")
+    try:
+        data = json.loads(raw)
+    except Exception:
+        raise ApiError(f"HTTP {status} 但返回的不是 JSON，"
+                       f"响应前 300 字符: {raw[:300]}")
+    if not isinstance(data, dict) or data.get("ok") != 1:
+        ok = data.get("ok") if isinstance(data, dict) else None
+        keys = list(data.keys()) if isinstance(data, dict) else type(data).__name__
+        body = json.dumps(data, ensure_ascii=False)[:300] if isinstance(data, dict) else repr(data)[:300]
+        raise ApiError(f"ok={ok}，字段={keys}，响应体: {body}"
+                       "（可能是 Cookie 过期，或微博拒绝了当前出口 IP）")
+    return data
 
 
 def absolutize_html(h):
@@ -95,9 +116,6 @@ def parse_user(uid, cookies):
     url = ("https://m.weibo.cn/api/container/getIndex"
            f"?type=uid&value={uid}&containerid={containerid}")
     data = api_get(url, cookies)
-    if not isinstance(data, dict) or data.get("ok") != 1:
-        msg = (data.get("msg") if isinstance(data, dict) else None) or "未知错误"
-        raise RuntimeError(f"API 返回异常: {msg}（可能是 Cookie 过期）")
     items = []
     for card in (data.get("data") or {}).get("cards") or []:
         if card.get("card_type") != 9:
@@ -155,6 +173,9 @@ def main():
         sys.exit(1)
     outdir = sys.argv[1] if len(sys.argv) > 1 else "."
     os.makedirs(outdir, exist_ok=True)
+    # 诊断信息：只打印长度和字段名，不打印 Cookie 值
+    names = [p.split("=", 1)[0].strip() for p in cookies.split(";") if "=" in p]
+    print(f"Cookie 长度: {len(cookies)} 字符, 字段: {names}")
     failed = 0
     for uid, disp_name in USERS:
         try:
